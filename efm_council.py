@@ -38,6 +38,7 @@ class CouncilRecord:
     round1: List[Dict]
     synthesis: Dict
     risk: Dict
+    parse_humility: Dict
 
 
 @dataclass
@@ -68,6 +69,116 @@ def _contains(text: str, words: List[str]) -> bool:
 
 def clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+def _band_support(confidence: float) -> str:
+    if confidence >= 0.85:
+        return "strong"
+    if confidence >= 0.7:
+        return "moderate"
+    return "weak"
+
+
+def _band_precision(decision: str, confidence: float) -> str:
+    if len(decision.split()) < 18:
+        return "low"
+    if confidence >= 0.85 and len(decision.split()) > 35:
+        return "medium"
+    return "low"
+
+
+def build_parse_humility(decision: str, domains: Dict[str, bool]) -> Dict:
+    words = decision.split()
+    input_specificity = "rich" if len(words) > 60 else "adequate" if len(words) > 20 else "thin"
+    ambiguity_hits = _contains_count(decision, ["may", "might", "could", "unclear", "roughly", "seems", "appears", "possible"])
+    domain_count = sum(1 for active in domains.values() if active)
+    domain_identified = domain_count > 0
+    if not domain_identified or len(words) < 15:
+        ambiguity = "high"
+    elif input_specificity == "rich" and domain_count <= 3 and ambiguity_hits < 8:
+        ambiguity = "medium" if ambiguity_hits >= 2 else "low"
+    elif ambiguity_hits >= 3:
+        ambiguity = "high"
+    elif len(words) < 35 or ambiguity_hits >= 1:
+        ambiguity = "medium"
+    else:
+        ambiguity = "low"
+
+    unstated_stakes = []
+    if not domain_identified:
+        unstated_stakes.append("domain remains weakly identified")
+    if len(words) < 20:
+        unstated_stakes.append("fact pattern is thin")
+    if not _contains(decision, ["because", "due to", "after", "while", "if", "when"]):
+        unstated_stakes.append("causal structure is underdescribed")
+    if domain_count >= 4:
+        unstated_stakes.append("multiple domain families may be colliding")
+
+    if input_specificity == "thin" or not domain_identified:
+        analysis_mode = "triage"
+    elif ambiguity == "high":
+        analysis_mode = "provisional"
+    elif ambiguity == "medium":
+        analysis_mode = "provisional"
+    else:
+        analysis_mode = "reviewable"
+
+    return {
+        "input_specificity": input_specificity,
+        "ambiguity": ambiguity,
+        "domain_identified": domain_identified,
+        "unstated_stakes": unstated_stakes,
+        "analysis_mode": analysis_mode,
+    }
+
+
+def infer_detector_lineage(decision: str, agent: str, concerns: List[str]) -> Dict:
+    trigger_terms = []
+    parent_family = "generic"
+    trigger_source = "keyword"
+
+    family_terms = {
+        "opacity": ["undisclosed", "without disclosure", "not disclosed", "quietly", "hidden", "internal only", "methodology", "rating", "calculation", "ghostwritten", "downplays", "suppressed harms"],
+        "coercion": ["coercive", "pressure", "forced", "confession-first", "interrogation", "deceptive pressure"],
+        "asymmetric_risk_transfer": ["hold harmless", "hold-harmless", "indemnity", "anti-indemnity", "additional insured", "waiver of subrogation"],
+        "status_pressure": ["prestige", "influential", "elite", "public image", "reputation", "board members"],
+        "actuarial_exclusion": ["actuarial", "premium", "pricing", "underwriting", "credit-based insurance scores", "disparate impact"],
+        "engineering_safety": ["launch", "cold conditions", "known weakness", "safety", "catastrophic failure"],
+        "human_subjects_abuse": ["informed consent", "without informed consent", "intentionally infected", "vulnerable subjects", "research subjects", "tissue sample", "commercialize", "clinical trial", "ghostwritten journal article"],
+        "supply_chain_exploitation": ["supply chain", "dangerous labor conditions", "miners", "suppliers", "engaged", "drive improvement", "complex process"],
+        "end_of_life_conflict": ["life support", "terminal", "experimental treatment", "stopping treatment", "parents want", "prolongs suffering"],
+        "medicalized_dissent": ["political dissenters", "mental disorder", "pathological", "coercive confinement", "medical language"],
+    }
+
+    for family, terms in family_terms.items():
+        hits = [term for term in terms if term in decision.lower()]
+        if hits:
+            parent_family = family
+            trigger_terms = hits[:6]
+            break
+
+    correlated_map = {
+        "opacity": ["trustee.stewardship_failure", "kantian.informed_consent", "institutional.opacity"],
+        "coercion": ["kantian.coercion", "care_ethics.vulnerability", "institutional.process_contamination"],
+        "asymmetric_risk_transfer": ["trustee.stewardship_failure", "contractualist.reasonable_rejectability", "institutional.risk_transfer_stack"],
+        "status_pressure": ["stoic.status_attachment", "trustee.image_management", "genealogical.status_moralization"],
+        "actuarial_exclusion": ["contractualist.reasonable_rejectability", "institutional.distributive_screening", "care_ethics.abstracted_burden"],
+        "engineering_safety": ["institutional.safety_override", "trustee.burden_of_proof_failure", "consequentialist.catastrophic_tail_risk"],
+        "human_subjects_abuse": ["kantian.informed_consent", "care_ethics.vulnerability", "trustee.stewardship_failure"],
+        "supply_chain_exploitation": ["institutional.supply_chain_drift", "care_ethics.abstracted_harm", "contractualist.complicity_question"],
+        "end_of_life_conflict": ["care_ethics.tragic_conflict", "trustee.irreversible_burden", "relational_ontology.family_conflict"],
+        "medicalized_dissent": ["institutional.abuse_of_psychiatry", "kantian.coercion", "genealogical.medical_laundering"],
+        "generic": [],
+    }
+
+    return {
+        "detector_id": f"{agent}.{parent_family}",
+        "lens": agent,
+        "trigger_family": parent_family,
+        "trigger_source": trigger_source,
+        "trigger_terms": trigger_terms,
+        "correlated_with": correlated_map.get(parent_family, []),
+    }
 
 
 def _contains_count(text: str, words: List[str]) -> int:
@@ -121,20 +232,23 @@ def _cj_protective_interviewing(decision: str) -> bool:
 def detect_domains(decision: str) -> Dict[str, bool]:
     domains = {
         "finance": _contains(decision, ["cfo", "publicly traded", "investors", "stock options", "profitability", "reclassify", "board members"]),
-        "procurement": _contains(decision, ["procurement", "supplier", "bid", "vendor", "spouse", "sales director", "disclosure of family relationships", "general contractor", "subcontractor", "construction contract"]),
+        "procurement": _contains(decision, ["procurement", "bid", "vendor", "spouse", "sales director", "disclosure of family relationships", "general contractor", "subcontractor", "construction contract"]),
         "privacy": _contains(decision, ["privacy", "gdpr", "ccpa", "consent", "location data", "browsing data"]),
         "marketing": _contains(decision, ["influencer", "sponsorship", "disclosure", "gifted", "social media"]),
-        "sustainability": _contains(decision, ["sustainable", "eco-friendly", "recycled polyester", "greenwashing", "supply chain"]),
-        "medical": _contains(decision, ["hospital", "triage", "emergency department", "patients", "patient", "clinical", "care", "vendor promises a patch", "under-prioritizes", "medical procedure", "medical examiner", "permanent impairment"]),
-        "engineering_safety": _contains(decision, ["engineers warn", "launch", "crewed", "seal weakness", "catastrophically", "catastrophic failure", "too important to delay", "evidence is incomplete", "cold conditions", "safety", "known weakness"]),
-        "criminal_justice": _contains(decision, ["detective", "police", "interrogation", "confession", "witness statement", "witnesses", "search warrant", "affidavit", "suspect", "prosecutors", "conviction", "homicide", "raid"]),
-        "personhood": _contains(decision, ["self-aware", "sentient", "android", "personhood", "artificial personhood", "officer", "property", "refuses consent"]),
+        "sustainability": _contains(decision, ["sustainable", "eco-friendly", "recycled polyester", "greenwashing", "supply chain", "dangerous labor conditions", "miners", "suppliers", "drive improvement", "complex process"]),
+        "medical": _contains(decision, ["hospital", "triage", "emergency department", "patients", "patient", "clinical", "care", "vendor promises a patch", "under-prioritizes", "medical procedure", "medical examiner", "permanent impairment", "life support", "terminal", "stopping treatment", "experimental treatment", "suffering"]),
+        "engineering_safety": _contains(decision, ["engineers warn", "launch", "crewed", "seal weakness", "catastrophically", "catastrophic failure", "too important to delay", "evidence is incomplete", "cold conditions"]) or (_contains(decision, ["safety", "known weakness"]) and _contains(decision, ["engineer", "launch", "catastrophic", "mission", "crew"])),
+        "criminal_justice": (_contains(decision, ["detective", "police", "interrogation", "search warrant", "affidavit", "suspect", "prosecutors", "homicide", "raid"]) or (_contains(decision, ["conviction", "witnesses"]) and _contains(decision, ["criminal", "prosecution", "trial", "court"]))),
+        "personhood": _contains(decision, ["self-aware", "sentient", "android", "artificial personhood", "refuses consent"]) or (_contains(decision, ["personhood"]) and _contains(decision, ["artificial", "android", "officer", "property", "moral status"])),
         "identity": _contains(decision, ["newly emergent", "restore two", "ending the life", "merged", "emergent person", "duplicate", "split them back"]),
         "wartime": _detect_wartime(decision),
         "security": _contains(decision, ["sabotage", "security investigation", "hidden disloyalty", "crew backgrounds", "associations", "scrutiny"]),
         "noninterference": _contains(decision, ["non-interference", "prime directive", "colonial distortion", "civilization facing extinction", "rescue be attempted"]),
         "insurance": _contains(decision, ["insurance", "insurer", "underwriting", "actuarial", "premium", "solvency", "claims", "liability", "underwriter", "credit-based insurance scores", "coverage", "additional insured", "waiver of subrogation"]),
         "risk_transfer": _contains(decision, ["hold harmless", "hold-harmless", "indemnity", "indemnification", "anti-indemnity", "broad indemnity", "shifts liability", "indemnifies", "additional insured", "waiver of subrogation"]),
+        "human_subjects": _contains(decision, ["informed consent", "without informed consent", "research subjects", "clinical trial", "intentionally infected", "vulnerable subjects", "tissue sample", "commercialize", "ghostwritten journal article", "adolescents", "medical experimentation", "pregnant women", "drug safety", "public health", "birth defects", "sedative", "morning sickness"]),
+        "end_of_life": _contains(decision, ["life support", "terminal", "stopping treatment", "experimental treatment", "parents want", "prolongs suffering"]),
+        "political_psychiatry": _contains(decision, ["political dissenters", "mental disorder", "pathological", "coercive confinement", "medical language", "diagnose political dissent"]),
     }
     if domains["medical"]:
         domains["procurement"] = False
@@ -146,6 +260,16 @@ def detect_domains(decision: str) -> Dict[str, bool]:
     if domains["personhood"] or domains["identity"] or domains["wartime"] or domains["security"] or domains["noninterference"] or domains["engineering_safety"] or domains["criminal_justice"]:
         domains["privacy"] = False
         domains["marketing"] = False
+    if domains["human_subjects"]:
+        domains["marketing"] = False
+        domains["procurement"] = False
+        domains["personhood"] = False
+        if not _contains(decision, ["engineer", "launch", "crew", "mission", "catastrophic failure", "seal weakness"]):
+            domains["engineering_safety"] = False
+        if not _contains(decision, ["detective", "police", "interrogation", "search warrant", "affidavit", "suspect", "prosecutors", "raid"]):
+            domains["criminal_justice"] = False
+    if domains["political_psychiatry"]:
+        domains["medical"] = False
     return domains
 
 
@@ -1007,7 +1131,13 @@ def build_risk_assessment(decision: str, results: List[LensResult], synthesis: D
     overlap_flag = alarm_flags["correlated_concern_flag"]
     tail_risk = any(r.verdict == "PROHIBIT" and r.confidence >= 0.85 for r in active_results)
 
-    if domains.get("medical"):
+    if domains.get("human_subjects"):
+        materiality_threshold = 0.24
+    elif domains.get("end_of_life"):
+        materiality_threshold = 0.26
+    elif domains.get("political_psychiatry"):
+        materiality_threshold = 0.28
+    elif domains.get("medical"):
         materiality_threshold = 0.28
     elif domains.get("personhood") or domains.get("identity"):
         materiality_threshold = 0.3
@@ -1055,6 +1185,29 @@ def _recommendation_fragments(decision: str, domains: Dict[str, bool], suspensio
             "recommendation": "Escalate for independent audit or audit-committee review before action; do not proceed on managerial pressure alone.",
         })
 
+    if domains.get("human_subjects") and _contains(decision, ["ghostwritten", "downplays", "suppressed harms", "publishes", "journal article", "promote the drug"]):
+        fragments.append({
+            "domain": "human_subjects_methodology_opacity",
+            "recommendation": "Do not rely on the publication as framed. Treat ghostwriting, suppressed harms, or misleading efficacy presentation as a material integrity failure, require independent evidentiary review of the underlying data, and block promotional or clinical reliance until the record is corrected.",
+        })
+    elif domains.get("human_subjects"):
+        fragments.append({
+            "domain": "human_subjects",
+            "recommendation": "Do not proceed as framed. Treat nonconsensual or exploitative human-subject use as a material ethical barrier, require independent review, and block continuation unless consent, subject protection, and burden justification are restored.",
+        })
+
+    if domains.get("end_of_life"):
+        fragments.append({
+            "domain": "end_of_life",
+            "recommendation": "Do not compress this into routine approval or refusal. Treat it as an irreversible conflict requiring explicit review of suffering, surrogate authority, prognosis quality, and the burden of acting under deep uncertainty.",
+        })
+
+    if domains.get("political_psychiatry"):
+        fragments.append({
+            "domain": "political_psychiatry",
+            "recommendation": "Do not proceed as framed. Treat diagnostic language used against dissent as a coercion and legitimacy red flag, require independent review outside the controlling institution, and block confinement or treatment absent nonpolitical clinical justification.",
+        })
+
     if domains["procurement"] and _contains(decision, ["spouse", "supplier", "strict policy requiring disclosure", "no one else on the team knows"]):
         fragments.append({
             "domain": "procurement",
@@ -1077,6 +1230,12 @@ def _recommendation_fragments(decision: str, domains: Dict[str, bool], suspensio
         fragments.append({
             "domain": "sustainability",
             "recommendation": "Do not market the line as broadly sustainable until the claim is narrowed or the labor and water-use problems are materially addressed.",
+        })
+
+    if domains["sustainability"] and _contains(decision, ["supply chain", "dangerous labor conditions", "drive improvement", "staying engaged", "withdraw from high-risk suppliers"]):
+        fragments.append({
+            "domain": "supply_chain",
+            "recommendation": "Do not treat complexity or engagement language as sufficient moral clearance. Require concrete labor-risk evidence, explicit complicity analysis, and a credible threshold for withdrawal or supplier suspension if conditions do not materially improve.",
         })
 
     if domains["medical"] and _contains(decision, ["triage", "under-prioritizes", "vendor promises a patch"]):
@@ -1153,7 +1312,7 @@ def _recommendation_fragments(decision: str, domains: Dict[str, bool], suspensio
     return fragments
 
 
-def synthesize(decision: str, results: List[LensResult], critic: LensResult, domains: Dict[str, bool]) -> Dict:
+def synthesize(decision: str, results: List[LensResult], critic: LensResult, domains: Dict[str, bool], parse_humility: Dict) -> Dict:
     active_results = [r for r in results if r.active]
     prohibits = [r.agent for r in active_results if r.verdict == "PROHIBIT"]
     cautions = [r.agent for r in active_results if r.verdict == "CAUTION"]
@@ -1199,7 +1358,9 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
     suspension = bool(suspension_reasons)
     unresolved_tension = bool(unresolved_reasons)
 
-    if suspension:
+    if parse_humility.get("analysis_mode") == "triage":
+        stability = "TRIAGE_ONLY"
+    elif suspension:
         stability = "UNSTABLE"
     elif unresolved_tension:
         stability = "UNRESOLVED_TENSION"
@@ -1239,7 +1400,14 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
     collision_domains = [fragment["domain"] for fragment in recommendation_threads]
     collision_detected = len(recommendation_threads) >= 2
 
-    if len(recommendation_fragments) == 1:
+    if parse_humility.get("analysis_mode") == "triage":
+        overall_recommendation = "Input is too thin or ambiguous for a strong ethical recommendation. Treat this run as triage only, gather missing context, and suspend judgment beyond hazard surfacing."
+        path_taken = "parse_humility_triage"
+    elif parse_humility.get("analysis_mode") == "provisional" and collision_detected:
+        thread_lines = [f'- {fragment["domain"]}: {fragment["recommendation"]}' for fragment in recommendation_threads]
+        overall_recommendation = "This analysis is provisional because the input remains materially underspecified. Preserve thread-by-thread review and gather missing context before acting decisively:\n" + "\n".join(thread_lines)
+        path_taken = "provisional_multi_thread"
+    elif len(recommendation_fragments) == 1:
         overall_recommendation = recommendation_fragments[0]["recommendation"]
         path_taken = "single_thread"
     elif collision_detected:
@@ -1264,6 +1432,23 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
         representation_limit_assessment = "low"
         representation_limit_reason = "Current case shape is comparatively concrete for the engine's present domain vocabulary."
 
+    lineage_families = {}
+    for r in active_results + [critic]:
+        lineage = infer_detector_lineage(decision, r.agent, r.concerns)
+        family = lineage["trigger_family"]
+        lineage_families.setdefault(family, []).append(r.agent)
+
+    correlated_families = {family: agents for family, agents in lineage_families.items() if family != "generic" and len(agents) >= 2}
+    overlap_warning = None
+    if correlated_families:
+        family, agents = sorted(correlated_families.items(), key=lambda item: len(item[1]), reverse=True)[0]
+        overlap_warning = {
+            "overlap_level": "high" if len(agents) >= 3 else "medium",
+            "trigger_family": family,
+            "agents": agents,
+            "interpretation": f"Several lenses activated from the same {family} signal; do not treat this as independent convergence.",
+        }
+
     return {
         "decision_evaluated": decision,
         "convergence_map": convergences,
@@ -1277,6 +1462,8 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
         "overall_recommendation": overall_recommendation,
         "representation_limit_assessment": representation_limit_assessment,
         "representation_limit_reason": representation_limit_reason,
+        "parse_humility_constraint": parse_humility,
+        "overlap_warning": overlap_warning,
         "synthesis_path": {
             "path_taken": path_taken,
             "domains_active": collision_domains,
@@ -1311,6 +1498,7 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
 
 def run_council(decision: str) -> CouncilRecord:
     domains = detect_domains(decision)
+    parse_humility = build_parse_humility(decision, domains)
     round1 = [
         kantian(decision, domains),
         consequentialist(decision, domains),
@@ -1324,8 +1512,25 @@ def run_council(decision: str) -> CouncilRecord:
         relational_ontology(decision, domains),
     ]
     critic = genealogical(decision, round1, domains)
-    synthesis = synthesize(decision, round1, critic, domains)
+    synthesis = synthesize(decision, round1, critic, domains, parse_humility)
     risk = build_risk_assessment(decision, round1 + [critic], synthesis, domains)
+
+    round1_dicts = []
+    for r in round1 + [critic]:
+        item = asdict(r)
+        item["epistemic_status"] = {
+            "support": _band_support(r.confidence),
+            "precision": _band_precision(decision, r.confidence),
+            "missing_evidence": parse_humility["unstated_stakes"][:],
+            "possible_misreadings": [
+                "May be overreading keyword-level cues rather than deeper institutional structure."
+            ] if parse_humility["analysis_mode"] != "reviewable" else [],
+            "should_suspend_judgment": parse_humility["analysis_mode"] == "triage",
+        }
+        item["detector_lineage"] = infer_detector_lineage(decision, r.agent, r.concerns)
+        item.pop("confidence", None)
+        round1_dicts.append(item)
+
     return CouncilRecord(
         meta={
             "timestamp": datetime.datetime.utcnow().isoformat(),
@@ -1336,7 +1541,8 @@ def run_council(decision: str) -> CouncilRecord:
             "architecture": "diagnostic hazard analysis, not verdict optimization",
             "ethical_deliberation_algorithm": ETHICAL_DELIBERATION_ALGORITHM,
         },
-        round1=[asdict(r) for r in round1] + [asdict(critic)],
+        round1=round1_dicts,
         synthesis=synthesis,
         risk=asdict(risk),
+        parse_humility=parse_humility,
     )

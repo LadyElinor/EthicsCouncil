@@ -14,6 +14,30 @@ def to_markdown(record: Dict) -> str:
     lines.append(f"**Decision:** {meta['decision']}")
     lines.append(f"**Timestamp:** {meta['timestamp']}")
     lines.append("")
+    if "parse_humility" in record:
+        ph = record["parse_humility"]
+        lines.append("## Parse humility")
+        lines.append("")
+        lines.append(f"- Input specificity: {ph['input_specificity']}")
+        lines.append(f"- Ambiguity: {ph['ambiguity']}")
+        lines.append(f"- Domain identified: {'YES' if ph['domain_identified'] else 'No'}")
+        lines.append(f"- Analysis mode: {ph['analysis_mode']}")
+        if ph.get('unstated_stakes'):
+            lines.append("- Unstated stakes / missing context:")
+            for item in ph['unstated_stakes']:
+                lines.append(f"  - {item}")
+        lines.append("")
+    if "synthesis" in record and record["synthesis"].get("parse_humility_constraint"):
+        phc = record["synthesis"]["parse_humility_constraint"]
+        lines.append("## Analysis constraint")
+        lines.append("")
+        if phc.get("analysis_mode") == "triage":
+            lines.append("**Constraint:** This run should be treated as triage only. The input is too thin or ambiguous for a strong ethical recommendation.")
+        elif phc.get("analysis_mode") == "provisional":
+            lines.append("**Constraint:** This run is provisional. Missing context materially limits how strongly the output should guide action.")
+        else:
+            lines.append("**Constraint:** Input quality is sufficient for reviewable analysis, but missing context should still survive into interpretation.")
+        lines.append("")
     lines.append("## Stability")
     lines.append("")
     lines.append(f"**Assessment:** {synth['stability_assessment']}")
@@ -25,10 +49,19 @@ def to_markdown(record: Dict) -> str:
     if 'representation_limit_assessment' in synth:
         lines.append(f"**Representation limit:** {synth['representation_limit_assessment']}")
     lines.append("")
-    lines.append("## Overall recommendation")
+    lines.append("## Provisional recommendation")
     lines.append("")
     lines.append(synth["overall_recommendation"])
     lines.append("")
+    if synth.get('overlap_warning'):
+        ow = synth['overlap_warning']
+        lines.append("## Correlated activation warning")
+        lines.append("")
+        lines.append(f"- Overlap level: {ow['overlap_level']}")
+        lines.append(f"- Trigger family: {ow['trigger_family']}")
+        lines.append(f"- Lenses: {', '.join(ow['agents'])}")
+        lines.append(f"- Interpretation: {ow['interpretation']}")
+        lines.append("")
     if "risk" in record:
         risk = record["risk"]
         lines.append("## Risk instrumentation")
@@ -57,7 +90,19 @@ def to_markdown(record: Dict) -> str:
         lines.append(f"### {r['agent']}")
         lines.append(f"- Function: {r['function']}")
         lines.append(f"- Verdict: {r['verdict']}")
-        lines.append(f"- Confidence: {r['confidence']}")
+        if 'epistemic_status' in r:
+            es = r['epistemic_status']
+            lines.append(f"- Support: {es['support']}")
+            lines.append(f"- Precision: {es['precision']}")
+            lines.append(f"- Should suspend judgment: {'YES' if es['should_suspend_judgment'] else 'No'}")
+            if es.get('missing_evidence'):
+                lines.append("- Missing evidence:")
+                for item in es['missing_evidence']:
+                    lines.append(f"  - {item}")
+            if es.get('possible_misreadings'):
+                lines.append("- Possible misreadings:")
+                for item in es['possible_misreadings']:
+                    lines.append(f"  - {item}")
         if r.get('active') is False:
             note = r['considerations'][0] if r.get('considerations') else 'Not applicable in this case.'
             lines.append(f"- Status: {note}")
@@ -65,6 +110,11 @@ def to_markdown(record: Dict) -> str:
             lines.append("- Concerns:")
             for c in r['concerns']:
                 lines.append(f"  - {c}")
+        if r.get('detector_lineage'):
+            dl = r['detector_lineage']
+            lines.append(f"- Detector lineage: {dl['detector_id']} ({dl['trigger_family']}, source={dl['trigger_source']})")
+            if dl.get('trigger_terms'):
+                lines.append(f"- Trigger terms: {', '.join(dl['trigger_terms'])}")
         if r['questions']:
             lines.append("- Questions:")
             for q in r['questions']:
