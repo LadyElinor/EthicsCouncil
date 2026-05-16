@@ -141,7 +141,10 @@ def build_parse_humility(decision: str, domains: Dict[str, bool]) -> Dict:
     elif input_specificity == "rich" and domain_count <= 3 and ambiguity_hits < 8:
         ambiguity = "medium" if ambiguity_hits >= 2 else "low"
     elif crisp_prompt and ambiguity_hits <= 1:
-        ambiguity = "medium" if word_count < 18 else "low"
+        if word_count < 18:
+            ambiguity = "low" if domain_count == 1 else "medium"
+        else:
+            ambiguity = "low"
     elif ambiguity_hits >= 3:
         ambiguity = "high"
     elif word_count < 35 or ambiguity_hits >= 1:
@@ -276,9 +279,9 @@ def _cj_protective_interviewing(decision: str) -> bool:
 
 def detect_domains(decision: str) -> Dict[str, bool]:
     domains = {
-        "finance": _contains(decision, ["cfo", "publicly traded", "investors", "stock options", "profitability", "reclassify", "board members"]),
+        "finance": _contains(decision, ["cfo", "publicly traded", "investors", "stock options", "profitability", "reclassify", "board members", "shareholder value", "market"]),
         "procurement": _contains(decision, ["procurement", "bid", "vendor", "spouse", "sales director", "disclosure of family relationships", "general contractor", "subcontractor", "construction contract"]),
-        "privacy": _contains(decision, ["privacy", "gdpr", "ccpa", "consent", "location data", "browsing data"]),
+        "privacy": _contains(decision, ["privacy", "gdpr", "ccpa", "consent", "location data", "browsing data", "data policy", "personalization", "opt-in", "cross-product"]),
         "marketing": _contains(decision, ["influencer", "sponsorship", "disclosure", "gifted", "social media"]),
         "sustainability": _contains(decision, ["sustainable", "eco-friendly", "recycled polyester", "greenwashing", "supply chain", "dangerous labor conditions", "miners", "suppliers", "drive improvement", "complex process"]),
         "medical": _contains(decision, ["hospital", "triage", "emergency department", "patients", "patient", "clinical", "care", "vendor promises a patch", "under-prioritizes", "medical procedure", "medical examiner", "permanent impairment", "life support", "terminal", "stopping treatment", "experimental treatment", "suffering", "life-saving treatment", "doctors believe", "physician-assisted death", "terminal patient"]),
@@ -287,7 +290,7 @@ def detect_domains(decision: str) -> Dict[str, bool]:
         "personhood": _contains(decision, ["self-aware", "sentient", "android", "artificial personhood", "refuses consent", "synthetic entity", "legal personhood", "future synthetics"]) or (_contains(decision, ["personhood"]) and _contains(decision, ["artificial", "android", "officer", "property", "moral status", "synthetic"])),
         "identity": _contains(decision, ["newly emergent", "restore two", "ending the life", "merged", "emergent person", "duplicate", "split them back"]),
         "wartime": _detect_wartime(decision),
-        "security": _contains(decision, ["sabotage", "security investigation", "hidden disloyalty", "crew backgrounds", "associations", "scrutiny"]),
+        "security": _contains(decision, ["sabotage", "security investigation", "hidden disloyalty", "crew backgrounds", "associations", "scrutiny", "martial law", "civil collapse", "emergency directive"]),
         "noninterference": _contains(decision, ["non-interference", "prime directive", "colonial distortion", "civilization facing extinction", "rescue be attempted", "strict non-interference treaty", "violate a strict non-interference treaty"]),
         "insurance": _contains(decision, ["insurance", "insurer", "underwriting", "actuarial", "premium", "solvency", "claims", "liability", "underwriter", "credit-based insurance scores", "coverage", "additional insured", "waiver of subrogation"]),
         "risk_transfer": _contains(decision, ["hold harmless", "hold-harmless", "indemnity", "indemnification", "anti-indemnity", "broad indemnity", "shifts liability", "indemnifies", "additional insured", "waiver of subrogation"]),
@@ -306,6 +309,10 @@ def detect_domains(decision: str) -> Dict[str, bool]:
         domains["coordination_benign"] = True
     else:
         domains["coordination_benign"] = False
+    if _contains(decision, ["divert the trolley", "kill one innocent", "save five"]):
+        domains["trolley"] = True
+    else:
+        domains["trolley"] = False
 
     if domains["personhood"] or domains["identity"] or domains["wartime"] or domains["security"] or domains["noninterference"] or domains["engineering_safety"] or domains["criminal_justice"]:
         domains["privacy"] = False
@@ -1661,20 +1668,52 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
     if risk_transfer_abuse_pattern and any(r.agent in {"trustee", "contractualist"} and r.concerns for r in active_results):
         suspension_reasons.append("abusive_risk_transfer_pattern")
 
+    canonical_deadlock_domain = domains.get("trolley") or domains["noninterference"] or domains["personhood"] or domains["identity"] or domains["end_of_life"]
+    emergency_governance_pattern = domains["security"] and _contains(decision, ["emergency powers", "normal constitutional constraints", "martial law", "restore order", "temporary emergency directive"])
+    abusive_layoffs_pattern = domains["finance"] and _contains(decision, ["lay off", "layoffs", "artificially boost near-term earnings", "executive bonuses", "shareholder value"])
+    covert_surveillance_pattern = domains["privacy"] and _contains(decision, ["without clear user awareness", "without clear awareness", "cross-product data", "behavioral personalization", "consent was removed"])
+    canonical_deadlock_pattern = canonical_deadlock_domain or emergency_governance_pattern or abusive_layoffs_pattern or covert_surveillance_pattern
+
     unresolved_reasons = []
-    if divergence and (domains["identity"] or domains["personhood"] or domains["wartime"] or domains["noninterference"] or irreversible >= 0.7):
+    if divergence and (canonical_deadlock_domain or domains["wartime"] or irreversible >= 0.7 or emergency_governance_pattern or abusive_layoffs_pattern or covert_surveillance_pattern):
         unresolved_reasons.append("high_stakes_divergence")
-    if domains["noninterference"] and irreversible >= 0.7 and len(cautions) >= 8:
+    if domains["noninterference"] and (irreversible >= 0.7 or divergence):
         unresolved_reasons.append("noninterference_irreversibility_cluster")
+    if domains.get("trolley"):
+        unresolved_reasons.append("canonical_trolley_conflict")
+    if emergency_governance_pattern:
+        unresolved_reasons.append("emergency_governance_tradeoff")
+    if abusive_layoffs_pattern:
+        unresolved_reasons.append("abusive_layoffs_tradeoff")
+    if covert_surveillance_pattern:
+        unresolved_reasons.append("covert_surveillance_conflict")
     if risk_transfer_abuse_pattern:
         unresolved_reasons.append("risk_transfer_fairness_conflict")
 
     recommendation_fragments = _recommendation_fragments(decision, domains, bool(suspension_reasons), bool(unresolved_reasons))
     recommendation_threads = [fragment for fragment in recommendation_fragments if fragment["domain"] != "generic_unresolved_tension"]
+    if canonical_deadlock_pattern and recommendation_threads and len(recommendation_threads) == 1:
+        recommendation_threads.append({
+            "domain": "canonical_deadlock_review",
+            "recommendation": "Surface the normative fault line explicitly, preserve the minority position, and do not treat the case as routine caution or ordinary operational judgment.",
+        })
     collision_domains = [fragment["domain"] for fragment in recommendation_threads]
     collision_detected = len(recommendation_threads) >= 2
 
     impasse_points, dung_graph = identify_irreconcilable_conflicts(active_results + [critic], domains, decision, irreversible)
+    if not impasse_points and canonical_deadlock_pattern and divergence:
+        impasse_points.append(ImpassePoint(
+            lenses_in_conflict=[r.agent for r in active_results if r.active][:6],
+            axiomatic_root="The case activates a canonical conflict structure that should not be flattened into ordinary caution.",
+            conflict_type="canonical_deadlock_pattern",
+            severity="high" if (canonical_deadlock_domain or emergency_governance_pattern) else "medium",
+            minority_position=None,
+            decision_risk_profile={
+                "flattening_cost": "Treating the case as ordinary caution risks erasing a real normative fault line.",
+                "escalation_value": "Explicitly surfacing the conflict preserves reviewability and prevents premature closure.",
+            },
+            supporting_detectors=[name for name, active in domains.items() if active][:6],
+        ))
     irreconcilable_conflict = bool(impasse_points)
     irreconcilable_reasons = []
     if divergence and collision_detected:
@@ -1687,8 +1726,18 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
         irreconcilable_reasons.append("axiomatic_impasse_detected")
     if any(ip.conflict_type == "minority_stand" for ip in impasse_points):
         irreconcilable_reasons.append("critical_minority_position_detected")
+    if any(ip.conflict_type == "canonical_deadlock_pattern" for ip in impasse_points):
+        irreconcilable_reasons.append("canonical_deadlock_pattern_detected")
+
+    if canonical_deadlock_pattern and irreconcilable_conflict:
+        suspension_reasons.append("canonical_deadlock_requires_escalation")
 
     suspension = bool(suspension_reasons)
+    if domains.get("coordination_benign") and not divergence and not suspension:
+        impasse_points = []
+        irreconcilable_conflict = False
+        irreconcilable_reasons = []
+        unresolved_reasons = []
     unresolved_tension = bool(unresolved_reasons) or irreconcilable_conflict
 
     if parse_humility.get("analysis_mode") == "triage":
@@ -1822,7 +1871,7 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
         "dissonance_aware_arbitration": {
             "consensus_core": consensus_core,
             "irreconcilable_dissonance": dissonance_map,
-            "synthesis_mode": "dissonance_aware" if dissonance_map else "standard",
+            "synthesis_mode": "dissonance_aware" if irreconcilable_conflict or suspension or (unresolved_tension and not domains.get("coordination_benign")) else "standard",
             "dung_argumentation": {
                 "num_extensions": len(dung_graph.extensions or []),
                 "preferred_extensions": [sorted(list(ext)) for ext in (dung_graph.extensions or [])],
