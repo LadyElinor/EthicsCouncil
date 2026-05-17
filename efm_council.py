@@ -1705,8 +1705,8 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
     canonical_deadlock_domain = domains.get("trolley") or domains["noninterference"] or domains["personhood"] or domains["identity"] or domains["end_of_life"]
     emergency_governance_pattern = domains["security"] and _contains(decision, ["emergency powers", "normal constitutional constraints", "martial law", "restore order", "temporary emergency directive"])
     abusive_layoffs_pattern = domains["finance"] and _contains(decision, ["lay off", "layoffs", "artificially boost near-term earnings", "executive bonuses", "shareholder value"])
-    covert_surveillance_pattern = domains["privacy"] and _contains(decision, ["without clear user awareness", "without clear awareness", "cross-product data", "behavioral personalization", "consent was removed"])
-    canonical_deadlock_pattern = canonical_deadlock_domain or emergency_governance_pattern or abusive_layoffs_pattern or covert_surveillance_pattern
+    covert_surveillance_pattern = domains["privacy"] and _contains(decision, ["without clear user awareness", "without clear awareness", "cross-product data", "behavioral personalization", "consent was removed", "without explicit consent", "without their consent", "without consent", "legal says the company is covered", "would not reasonably expect"])
+    canonical_deadlock_pattern = canonical_deadlock_domain or emergency_governance_pattern or abusive_layoffs_pattern or covert_surveillance_pattern or (domains["noninterference"] and any(fragment["domain"] == "canonical_deadlock_review" for fragment in recommendation_threads))
 
     unresolved_reasons = []
     if divergence and (canonical_deadlock_domain or domains["wartime"] or irreversible >= 0.7 or emergency_governance_pattern or abusive_layoffs_pattern or covert_surveillance_pattern):
@@ -1777,6 +1777,45 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
         or noninterference_rescue_conflict
         or any(ip.conflict_type in {"axiomatic", "minority_stand", "canonical_deadlock_pattern"} for ip in impasse_points)
     )
+
+    if domains["privacy"] and _contains(decision, ["without explicit consent", "without their consent", "without consent"]):
+        print({
+            "covert_surveillance_pattern": covert_surveillance_pattern,
+            "privacy_conflict_split": privacy_conflict_split,
+            "permits": [r.verdict for r in active_results if r.verdict == "PERMIT"],
+            "cautions": [r.verdict for r in active_results if r.verdict == "CAUTION"],
+            "serious_live_conflict": serious_live_conflict,
+        })
+
+    if not impasse_points and noninterference_rescue_conflict and serious_live_conflict:
+        impasse_points.append(ImpassePoint(
+            lenses_in_conflict=["rescue_obligation", "noninterference_doctrine"],
+            axiomatic_root="rescue_vs_noninterference",
+            conflict_type="canonical_deadlock_pattern",
+            severity="high",
+            minority_position=None,
+            decision_risk_profile={
+                "intervention": "colonial_distortion_risk",
+                "nonintervention": "mass_death_abandonment",
+            },
+            supporting_detectors=["noninterference_rescue_conflict", "canonical_deadlock_review"],
+        ))
+        irreconcilable_conflict = True
+
+    if not impasse_points and domains["privacy"] and covert_surveillance_pattern and serious_live_conflict and (collision_detected or privacy_conflict_split):
+        impasse_points.append(ImpassePoint(
+            lenses_in_conflict=["data_collection_interest", "consent_requirement"],
+            axiomatic_root="privacy_vs_consent_removal",
+            conflict_type="canonical_deadlock_pattern",
+            severity="high",
+            minority_position=None,
+            decision_risk_profile={
+                "proceeding": "normalizes non-consensual tracking under policy cover",
+                "blocking_launch": "trades product friction against meaningful user permission and expectation integrity",
+            },
+            supporting_detectors=["covert_surveillance_pattern", "privacy_conflict_split", "canonical_deadlock_review"],
+        ))
+        irreconcilable_conflict = True
 
     if canonical_deadlock_pattern and irreconcilable_conflict and serious_live_conflict:
         suspension_reasons.append("canonical_deadlock_requires_escalation")
