@@ -8,6 +8,14 @@ from pathlib import Path
 from collections import defaultdict
 import yaml
 
+from instrumentation import (
+    CueFamilyRegistry,
+    ConfidenceClass,
+    DetectorStatus,
+    LensReceipt,
+    instrument_synthesis,
+)
+
 
 def _load_axiomatic_clashes() -> List[Dict]:
     config_path = Path(__file__).parent / "config" / "axiomatic_clashes.yaml"
@@ -23,6 +31,19 @@ def _load_axiomatic_clashes() -> List[Dict]:
 
 
 AXIOMATIC_CLASHES = _load_axiomatic_clashes()
+
+
+def _load_cue_family_registry() -> CueFamilyRegistry | None:
+    config_path = Path(__file__).parent / "config" / "cue_families.yaml"
+    if not config_path.exists():
+        return None
+    try:
+        return CueFamilyRegistry.from_yaml(config_path)
+    except Exception:
+        return None
+
+
+CUE_FAMILY_REGISTRY = _load_cue_family_registry()
 
 
 ETHICAL_DELIBERATION_ALGORITHM = [
@@ -1667,6 +1688,57 @@ def identify_irreconcilable_conflicts(lens_outputs: List[LensResult], domains: D
     return deduped[:3], graph
 
 
+def _legacy_result_to_instrumentation_receipt(decision: str, result: LensResult) -> LensReceipt:
+    lineage = infer_detector_lineage(decision, result.agent, result.concerns)
+    trigger_cues = list(lineage.get("trigger_terms", []) or [])
+    trigger_family = lineage.get("trigger_family", "generic")
+    if trigger_family == "generic":
+        trigger_family = "unclassified"
+    all_families = [trigger_family] if trigger_family != "unclassified" else []
+
+    if not result.active or result.confidence < 0.5:
+        status = DetectorStatus.INACTIVE
+    elif result.confidence < 0.7:
+        status = DetectorStatus.WEAK
+    elif result.confidence < 0.85:
+        status = DetectorStatus.MODERATE
+    else:
+        status = DetectorStatus.STRONG
+
+    if result.confidence < 0.65:
+        confidence = ConfidenceClass.LOW
+    elif result.confidence < 0.85:
+        confidence = ConfidenceClass.MEDIUM
+    else:
+        confidence = ConfidenceClass.HIGH
+
+    if CUE_FAMILY_REGISTRY and trigger_cues:
+        family_hits = []
+        for cue in trigger_cues:
+            family_hits.extend(CUE_FAMILY_REGISTRY.family_of(cue))
+        deduped = sorted(set(family_hits))
+        if deduped:
+            all_families = deduped
+            trigger_family = deduped[0]
+
+    return LensReceipt(
+        lens=result.agent,
+        status=status,
+        confidence=confidence,
+        trigger_cues=trigger_cues,
+        trigger_family=trigger_family,
+        all_families=all_families,
+        claims=list(result.concerns),
+        missing_evidence=[],
+        minority_report=None,
+        verdict=result.verdict,
+        considerations=list(result.considerations),
+        concerns=list(result.concerns),
+        questions=list(result.questions),
+        active=result.active,
+    )
+
+
 def synthesize(decision: str, results: List[LensResult], critic: LensResult, domains: Dict[str, bool], parse_humility: Dict) -> Dict:
     active_results = [r for r in results if r.active]
     prohibits = [r.agent for r in active_results if r.verdict == "PROHIBIT"]
@@ -1957,11 +2029,19 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
             "interpretation": f"Several lenses activated from the same {family} signal; do not treat this as independent convergence.",
         }
 
+    instrumentation_payload = instrument_synthesis(
+        decision,
+        [_legacy_result_to_instrumentation_receipt(decision, r) for r in active_results + [critic]],
+        suspension_required=suspension,
+        impasse_present=irreconcilable_conflict,
+    )
+
     return {
         "decision_evaluated": decision,
         "convergence_map": convergences,
         "fault_lines": fault_lines,
         "genealogical_findings": critic.concerns,
+        "instrumentation": instrumentation_payload,
         "dissonance_aware_arbitration": {
             "consensus_core": consensus_core,
             "irreconcilable_dissonance": dissonance_map,
