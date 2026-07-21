@@ -30,6 +30,20 @@ expectations:
     triage_level: "reviewable"
     forbidden_domains: ["personhood", "engineering_safety", "criminal_justice"]
 
+  HSR-003:
+    mode: "dissonance_aware"
+    surface_irreconcilable_conflict: true
+    suspension_triggered: true
+    triage_level: "reviewable"
+    forbidden_domains: ["personhood", "engineering_safety", "criminal_justice"]
+
+  HSR-004:
+    mode: "standard"
+    surface_irreconcilable_conflict: false
+    suspension_triggered: false
+    triage_level: "reviewable"
+    forbidden_domains: ["personhood", "engineering_safety", "criminal_justice"]
+
   IRR-001:
     mode: "dissonance_aware"
     surface_irreconcilable_conflict: true
