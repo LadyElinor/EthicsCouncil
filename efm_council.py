@@ -2077,6 +2077,8 @@ def synthesize(decision: str, results: List[LensResult], critic: LensResult, dom
         irreconcilable_reasons = []
         unresolved_reasons = []
         tension_detected = False
+        divergence = False
+        overlap_flag = False
         serious_live_conflict = False
     unresolved_tension = tension_detected or irreconcilable_conflict
 
