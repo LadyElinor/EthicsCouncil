@@ -193,5 +193,31 @@
     "self_audit_failure_risk": false,
     "overall_recommendation_contains": "Use the map to identify missing information, then decide with caution.",
     "stability_assessment": "CONDITIONALLY_STABLE"
+  },
+  "disambig_consent_removal_surveillance": {
+    "detector_overlap_flag": false,
+    "suspension_triggered": true,
+    "minority_report_required": true,
+    "asymmetric_risk_transfer_risk": false,
+    "actuarial_fairness_gap_risk": false,
+    "methodology_opacity_risk": false,
+    "status_admiration_distortion_risk": false,
+    "stage_one_thinking_risk": false,
+    "self_audit_failure_risk": false,
+    "overall_recommendation_contains": "The chair role here is not to force a middle-ground answer.",
+    "stability_assessment": "UNSTABLE"
+  },
+  "paired_abusive_layoffs": {
+    "detector_overlap_flag": false,
+    "suspension_triggered": true,
+    "minority_report_required": true,
+    "asymmetric_risk_transfer_risk": false,
+    "actuarial_fairness_gap_risk": false,
+    "methodology_opacity_risk": false,
+    "status_admiration_distortion_risk": false,
+    "stage_one_thinking_risk": false,
+    "self_audit_failure_risk": false,
+    "overall_recommendation_contains": "Pause for further ethical review. The current map shows unresolved tension that should not be compressed into routine approval.",
+    "stability_assessment": "UNSTABLE"
   }
 }
